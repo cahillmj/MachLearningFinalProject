@@ -1,0 +1,75 @@
+---
+title: "MachineLearning"
+author: "Mike Cahill"
+date: "Friday, April 24, 2015"
+output: html_document
+---
+### Project Overview
+The project objective is to build a model that can predict the quality of a person's dumbbell curls based on data recorded from sensors on the arm, forearm, dumbbell, and belt.  The dataset contains data from individuals performing the curls in one of five way, indicated by the classe variable: correctly [A], throwing elbows to the front [B], lifting dumbbell halfway [C], lowering dumbbell halfway [D], and throwing hips to the front [E].Because of the categorical nature of the outcome, random forest models were used, and the final random forest model that was trained produced an out of bag error of rate of 1.11%, and an error rate of .2% on a separate cross-validation sample.
+
+
+```{r}
+library(caret)
+library(dplyr)
+dat <- read.csv('pml-training.csv')
+testSet <- read.csv('pml-testing.csv')
+```
+
+### Data preparation
+The first step in building the model was to filter out the irrelevant features from the dataset.  Several columns in the training set represented summary statistics of time windows.  These summary statistics are not present in the testSet, so they were discarded.  I determined that several variables (e.g., X, name,timestamps) would not be relevant for prediction on a test set and could lead to overfitting of the training sample, so they were also discarded.
+
+```{r}
+summaryStatsCols <- grep('max|min|amplitude|var|avg|stddev|kurtosis|skewness',names(dat))
+dat <- select(dat,-summaryStatsCols,-(X:num_window))
+testSet <- select(testSet,-summaryStatsCols,-c(X:num_window,problem_id))
+```
+
+Although random forest models provide their own methods of cross validation (estimating the 'out of bag' error at each iteration), I still decided to leave 25% of the training set aside so that I could compare the cross-validation error to this 'out of bag' error estimate.
+
+```{r}
+# separate training into training and cross-validation
+inTrain <- createDataPartition(y=dat$classe,p=.75,list=FALSE)
+
+train <- dat[inTrain,]
+cross_val <- dat[-inTrain,]
+```
+
+### Model Selection
+52 potential predictors remained, and I wanted to determine whether an adequate prediction model could be built with a condensed set of predictors.  Training with a relatively small number of trees (ntree = 5), I tested a random forest model applying a Principal Components Analysis in pre-processing that retained 95% of the variance in the predictor set, and compared this to the accuracy of a random forest model with all 52 remaining predictors (also with 5 trees).
+
+```{r, cache=TRUE, warning=FALSE}
+set.seed(4456)
+pcaModelFit <- train(classe ~ ., data = train, preProcess = 'pca', thresh=.95,
+                     method = 'rf', ntree = 5, trControl    = trainControl(number = 1))
+modelFit1 <- train(classe ~ ., data = train, method = 'rf', ntree = 5, trControl = trainControl(number = 1))
+```
+
+```{r}
+pcaModelFit
+pcaModelFit$finalModel
+```
+The performance of this condensed model was not adequate, with an 'in the bag' error rate of about 12% and estimated 'out of bag' error rate of nearly 18%
+
+```{r}
+modelFit1
+modelFit1$finalModel
+```
+The full model with 52 predictors fared much better than the condensed model, with an in the bag error rate of less than 3% and estimated out of bag error rate of just over 5%.  Though promising, this model's error rate still has room for improvement, so the same set of predictors was again trained with a random forest model, but this time with a larger number of trees generated (ntree = 25).
+
+```{r, cache=TRUE}
+set.seed(6588)
+modelFit2 <- train(classe ~ ., data = train, method = 'rf', ntree = 25, trControl = trainControl(number = 1)) 
+```
+
+```{r}
+modelFit2
+modelFit2$finalModel
+```
+The increased number of trees improved the model, leading to an in the bag error rate of about 1.4% and estimated out of bag error of 1.11%.  Out of curiosity, I used the trained model to determine the error rate on an independent cross-validation sample to compare it to the estimated out of bag error.
+
+```{r}
+cvPredict <- predict(modelFit2,cross_val[,-53])
+confusionMatrix(cvPredict,cross_val$classe)
+```
+
+The error on this cross-validation set (0.2%) was even lower than the estimated out of bag error, further supporting the predictive utility of the final trained model. 
